@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Offline Attendance Scanner</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Library for QR Code Scanning -->
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <style>
+        body {
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+        
+        #reader {
+            width: 100% !important;
+            border: 2px solid #e2e8f0;
+            border-radius: 0.5rem;
+            overflow: hidden;
+        }
+        
+        #reader > div {
+            border: none !important;
+        }
+        
+        #reader video {
+            border-radius: 0.5rem;
+        }
+        
+        /* New Big Alert Styles */
+        #alert-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.6);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            pointer-events: none;
+        }
+        #alert-overlay.visible {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        #alert-box {
+            background-color: white;
+            padding: 2.5rem;
+            border-radius: 0.75rem;
+            text-align: center;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+            transform: scale(0.95);
+            transition: transform 0.3s ease;
+        }
+        #alert-overlay.visible #alert-box {
+            transform: scale(1);
+        }
+        #alert-icon {
+            font-size: 4rem;
+            margin-bottom: 1rem;
+        }
+        #alert-message {
+            font-size: 1.25rem;
+            font-weight: 500;
+            color: #4b5563;
+        }
+        
+        /* Alert Status Colors */
+        .alert-success #alert-icon { color: #16a34a; }
+        .alert-success #alert-message { color: #15803d; }
+        .alert-error #alert-icon { color: #dc2626; }
+        .alert-error #alert-message { color: #b91c1c; }
+        .alert-info #alert-icon { color: #2563eb; }
+        .alert-info #alert-message { color: #1d4ed8; }
+
+    </style>
+</head>
+<body class="bg-gray-100 dark:bg-gray-900 text-gray-800 dark:text-gray-200 font-sans p-4 md:p-6">
+
+    <div class="max-w-2xl mx-auto bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6">
+        <header class="text-center mb-6">
+            <h1 class="text-3xl font-bold text-indigo-600 dark:text-indigo-400">Club Attendance Scanner</h1>
+            <p class="text-gray-500 dark:text-gray-400 mt-1">Scan QR codes offline and sync when you're back online.</p>
+        </header>
+
+        <!-- Step 1: Setup -->
+        <div id="setup-section" class="mb-6">
+            <h2 class="text-xl font-semibold mb-3 border-b pb-2">Step 1: Setup (Online)</h2>
+            <label for="webAppUrl" class="block mb-2 font-medium text-gray-700 dark:text-gray-300">Enter your Google Web App URL:</label>
+            <input type="url" id="webAppUrl" placeholder="https://script.google.com/macros/s/..." class="w-full p-2 border rounded-md dark:bg-gray-700 dark:border-gray-600 focus:ring-2 focus:ring-indigo-500">
+            <button id="downloadRosterBtn" class="mt-3 w-full bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 transition font-semibold disabled:bg-indigo-300">
+                Download Member Roster
+            </button>
+            <div id="rosterStatus" class="mt-2 text-sm text-center"></div>
+        </div>
+
+        <!-- Step 2: Scanning -->
+        <div id="scan-section" class="mb-6 hidden">
+            <h2 class="text-xl font-semibold mb-3 border-b pb-2">Step 2: Scan Members (Offline)</h2>
+            
+            <!-- Scanner Controls -->
+            <div class="mb-4 flex gap-2">
+                <button id="startScanningBtn" class="flex-1 bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 transition font-semibold">
+                    📷 Start Scanning
+                </button>
+                <button id="stopScanningBtn" class="flex-1 bg-red-600 text-white py-2 px-4 rounded-md hover:bg-red-700 transition font-semibold hidden">
+                    ⏹️ Stop Scanning
+                </button>
+            </div>
+            
+            <!-- Scanner Status -->
+            <div id="scanner-status" class="mb-3 text-center text-gray-600 dark:text-gray-400">
+                Click "Start Scanning" to begin scanning QR codes
+            </div>
+            
+            <!-- Alignment Guide -->
+            <div id="alignment-guide" class="mb-3 text-center text-green-600 font-semibold hidden">
+                📱 Hold QR code steady in the center of the camera view
+            </div>
+            
+            <!-- Scanner Display -->
+            <div id="scanner-container" class="mb-4">
+                <div id="reader"></div>
+            </div>
+        </div>
+
+        <!-- Step 3: Syncing -->
+        <div id="sync-section" class="mb-6">
+            <h2 class="text-xl font-semibold mb-3 border-b pb-2">Step 3: Sync Data (Online)</h2>
+            <p class="text-sm text-gray-600 dark:text-gray-400 mb-3">You have <strong id="scan-count" class="text-indigo-500">0</strong> scans saved locally. Connect to the internet and press sync.</p>
+            <button id="syncDataBtn" class="w-full bg-green-600 text-white py-2 px-4 rounded-md hover:bg-green-700 transition font-semibold disabled:bg-green-300">
+                Sync to Google Sheet
+            </button>
+            <button id="clearDataBtn" class="mt-2 w-full bg-gray-500 text-white py-2 px-4 rounded-md hover:bg-gray-600 transition font-semibold">
+                Clear Local Scans
+            </button>
+            <div id="syncStatus" class="mt-2 text-sm text-center"></div>
+        </div>
+
+        <!-- Log of Scanned Members -->
+        <div>
+            <h2 class="text-xl font-semibold mb-3 border-b pb-2">Scanned Members Log</h2>
+            <div id="scanned-log" class="max-h-60 overflow-y-auto bg-gray-50 dark:bg-gray-700 p-3 rounded-md text-sm">
+                No members scanned yet.
+            </div>
+        </div>
+    </div>
+    
+    <!-- Big Alert Modal -->
+    <div id="alert-overlay">
+        <div id="alert-box">
+            <div id="alert-icon"></div>
+            <div id="alert-message"></div>
+        </div>
+    </div>
+
+    <script>
+        const webAppUrlInput = document.getElementById('webAppUrl');
+        const downloadRosterBtn = document.getElementById('downloadRosterBtn');
+        const rosterStatus = document.getElementById('rosterStatus');
+
+        const setupSection = document.getElementById('setup-section');
+        const scanSection = document.getElementById('scan-section');
+        const startScanningBtn = document.getElementById('startScanningBtn');
+        const stopScanningBtn = document.getElementById('stopScanningBtn');
+        const scannerContainer = document.getElementById('scanner-container');
+        const scannerStatus = document.getElementById('scanner-status');
+        const alignmentGuide = document.getElementById('alignment-guide');
+        
+        const syncDataBtn = document.getElementById('syncDataBtn');
+        const syncStatus = document.getElementById('syncStatus');
+        const clearDataBtn = document.getElementById('clearDataBtn');
+        const scanCount = document.getElementById('scan-count');
+        const scannedLog = document.getElementById('scanned-log');
+
+        const alertOverlay = document.getElementById('alert-overlay');
+        const alertBox = document.getElementById('alert-box');
+        const alertIcon = document.getElementById('alert-icon');
+        const alertMessage = document.getElementById('alert-message');
+
+        let html5QrCode;
+        let isScanning = false;
+        
+        // Load data from localStorage on startup
+        document.addEventListener('DOMContentLoaded', () => {
+            const savedUrl = localStorage.getItem('webAppUrl');
+            if (savedUrl) {
+                webAppUrlInput.value = savedUrl;
+            }
+            updateScanLog();
+            const roster = localStorage.getItem('memberRoster');
+            if (roster) {
+                scanSection.classList.remove('hidden');
+                rosterStatus.innerHTML = `<span class="text-green-600">Roster for ${JSON.parse(roster).length} members loaded from memory.</span>`;
+            }
+        });
+
+        // Handle Roster Download
+        downloadRosterBtn.addEventListener('click', async () => {
+            const url = webAppUrlInput.value;
+            if (!url) {
+                rosterStatus.textContent = 'Please enter a valid Web App URL.';
+                rosterStatus.className = 'mt-2 text-sm text-center text-red-600';
+                return;
+            }
+            localStorage.setItem('webAppUrl', url);
+            rosterStatus.textContent = 'Downloading...';
+            rosterStatus.className = 'mt-2 text-sm text-center text-blue-600';
+            downloadRosterBtn.disabled = true;
+
+            try {
+                const response = await fetch(url + '?action=getRoster');
+                if (!response.ok) throw new Error(`Network response was not ok: ${response.statusText}`);
+                const roster = await response.json();
+                localStorage.setItem('memberRoster', JSON.stringify(roster));
+                rosterStatus.innerHTML = `<span class="text-green-600">Successfully downloaded roster for ${roster.length} members!</span>`;
+                scanSection.classList.remove('hidden');
+            } catch (error) {
+                rosterStatus.textContent = `Error: ${error.message}. Check URL and script deployment.`;
+                rosterStatus.className = 'mt-2 text-sm text-center text-red-600';
+            } finally {
+                downloadRosterBtn.disabled = false;
+            }
+        });
+        
+        // Add alignment box dynamically after scanner starts
+        function addAlignmentBox() {
+            // Remove any existing alignment box
+            const existingBox = document.getElementById('dynamic-alignment-box');
+            if (existingBox) {
+                existingBox.remove();
+            }
+            
+            // Wait for the video element to be created
+            setTimeout(() => {
+                const readerDiv = document.getElementById('reader');
+                const videoElement = readerDiv.querySelector('video');
+                
+                if (videoElement) {
+                    // Create alignment box
+                    const alignmentBox = document.createElement('div');
+                    alignmentBox.id = 'dynamic-alignment-box';
+                    alignmentBox.style.cssText = `
+                        position: absolute;
+                        top: 50%;
+                        left: 50%;
+                        width: 200px;
+                        height: 200px;
+                        margin-left: -100px;
+                        margin-top: -100px;
+                        border: 3px solid #10b981;
+                        border-radius: 12px;
+                        z-index: 1000;
+                        pointer-events: none;
+                        box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.3);
+                    `;
+                    
+                    // Add corner indicators
+                    const corners = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+                    corners.forEach(corner => {
+                        const cornerDiv = document.createElement('div');
+                        cornerDiv.style.cssText = `
+                            position: absolute;
+                            width: 20px;
+                            height: 20px;
+                            border: 3px solid #10b981;
+                        `;
+                        
+                        switch(corner) {
+                            case 'top-left':
+                                cornerDiv.style.cssText += 'top: -3px; left: -3px; border-right: none; border-bottom: none; border-top-left-radius: 12px;';
+                                break;
+                            case 'top-right':
+                                cornerDiv.style.cssText += 'top: -3px; right: -3px; border-left: none; border-bottom: none; border-top-right-radius: 12px;';
+                                break;
+                            case 'bottom-left':
+                                cornerDiv.style.cssText += 'bottom: -3px; left: -3px; border-right: none; border-top: none; border-bottom-left-radius: 12px;';
+                                break;
+                            case 'bottom-right':
+                                cornerDiv.style.cssText += 'bottom: -3px; right: -3px; border-left: none; border-top: none; border-bottom-right-radius: 12px;';
+                                break;
+                        }
+                        alignmentBox.appendChild(cornerDiv);
+                    });
+                    
+                    // Add instruction text
+                    const instruction = document.createElement('div');
+                    instruction.style.cssText = `
+                        position: absolute;
+                        bottom: -40px;
+                        left: 50%;
+                        transform: translateX(-50%);
+                        background: rgba(16, 185, 129, 0.9);
+                        color: white;
+                        padding: 6px 12px;
+                        border-radius: 6px;
+                        font-size: 12px;
+                        font-weight: 500;
+                        white-space: nowrap;
+                    `;
+                    instruction.textContent = 'Position QR code here';
+                    alignmentBox.appendChild(instruction);
+                    
+                    // Make reader div relative and add the box
+                    readerDiv.style.position = 'relative';
+                    readerDiv.appendChild(alignmentBox);
+                    
+                    console.log('Alignment box added successfully');
+                } else {
+                    console.log('Video element not found, retrying...');
+                    // Retry after another delay
+                    setTimeout(addAlignmentBox, 500);
+                }
+            }, 1000);
+        }
+        
+        // Start Scanning Button Handler
+        startScanningBtn.addEventListener('click', async () => {
+            try {
+                startScanningBtn.disabled = true;
+                scannerStatus.textContent = 'Requesting camera permission...';
+                scannerStatus.className = 'mb-3 text-center text-blue-600';
+                
+                // Clear any existing scanner
+                if (html5QrCode) {
+                    try {
+                        await html5QrCode.stop();
+                        html5QrCode.clear();
+                    } catch (e) {
+                        console.log('Error stopping previous scanner:', e);
+                    }
+                }
+                
+                // Create new scanner instance
+                html5QrCode = new Html5Qrcode("reader");
+                
+                // Get available cameras
+                const devices = await Html5Qrcode.getCameras();
+                console.log('Available cameras:', devices);
+                
+                if (devices && devices.length) {
+                    scannerStatus.textContent = 'Starting camera...';
+                    
+                    // Use back camera if available, otherwise use first camera
+                    let cameraId = devices[0].id;
+                    const backCamera = devices.find(device => 
+                        device.label.toLowerCase().includes('back') || 
+                        device.label.toLowerCase().includes('rear') ||
+                        device.label.toLowerCase().includes('environment')
+                    );
+                    if (backCamera) {
+                        cameraId = backCamera.id;
+                        console.log('Using back camera:', backCamera.label);
+                    } else {
+                        console.log('Using first available camera:', devices[0].label);
+                    }
+                    
+                    // Start scanning with optimized settings
+                    await html5QrCode.start(
+                        cameraId,
+                        {
+                            fps: 10,
+                            qrbox: { width: 200, height: 200 },
+                            aspectRatio: 1.0,
+                            disableFlip: false
+                        },
+                        onScanSuccess,
+                        onScanFailure
+                    );
+                    
+                    // Successfully started scanning
+                    isScanning = true;
+                    startScanningBtn.classList.add('hidden');
+                    stopScanningBtn.classList.remove('hidden');
+                    scannerStatus.textContent = '📷 Scanner active - Point camera at QR codes';
+                    scannerStatus.className = 'mb-3 text-center text-green-600 font-semibold';
+                    alignmentGuide.classList.remove('hidden');
+                    
+                    // Add alignment box
+                    addAlignmentBox();
+                    
+                } else {
+                    throw new Error('No cameras found on this device');
+                }
+                
+            } catch (error) {
+                console.error('Error starting scanner:', error);
+                let errorMessage = 'Camera error: ';
+                
+                if (error.name === 'NotAllowedError' || error.message.includes('Permission')) {
+                    errorMessage += 'Camera permission denied. Please allow camera access and try again.';
+                } else if (error.message.includes('NotFoundError') || error.message.includes('No cameras')) {
+                    errorMessage += 'No camera found on this device.';
+                } else if (error.message.includes('NotReadableError')) {
+                    errorMessage += 'Camera is being used by another application.';
+                } else {
+                    errorMessage += error.message;
+                }
+                
+                scannerStatus.textContent = errorMessage;
+                scannerStatus.className = 'mb-3 text-center text-red-600';
+                startScanningBtn.disabled = false;
+            }
+        });
+
+        // Stop Scanning Button Handler
+        stopScanningBtn.addEventListener('click', async () => {
+            try {
+                if (html5QrCode && isScanning) {
+                    await html5QrCode.stop();
+                    html5QrCode.clear();
+                    isScanning = false;
+                    stopScanningBtn.classList.add('hidden');
+                    startScanningBtn.classList.remove('hidden');
+                    startScanningBtn.disabled = false;
+                    scannerStatus.textContent = 'Scanner stopped. Click "Start Scanning" to resume.';
+                    scannerStatus.className = 'mb-3 text-center text-gray-600 dark:text-gray-400';
+                    alignmentGuide.classList.add('hidden');
+                    
+                    // Remove alignment box
+                    const alignmentBox = document.getElementById('dynamic-alignment-box');
+                    if (alignmentBox) {
+                        alignmentBox.remove();
+                    }
+                }
+            } catch (error) {
+                console.error('Error stopping scanner:', error);
+                scannerStatus.textContent = 'Error stopping scanner. Please refresh the page.';
+                scannerStatus.className = 'mb-3 text-center text-red-600';
+            }
+        });
+
+        // Handle successful scan
+        function onScanSuccess(decodedText, decodedResult) {
+            try {
+                console.log('QR Code detected:', decodedText);
+                
+                const roster = JSON.parse(localStorage.getItem('memberRoster') || '[]');
+                
+                // Extract ID from the QR code URL
+                let scannedId;
+                if (decodedText.includes('?id=')) {
+                    scannedId = decodedText.split('?id=')[1].split('&')[0];
+                } else {
+                    scannedId = decodedText.trim();
+                }
+
+                console.log('Extracted ID:', scannedId);
+
+                const member = roster.find(m => m.id === scannedId);
+                if (!member) {
+                    showBigAlert(`Unknown Member ID:<br>${scannedId}`, 'error');
+                    return;
+                }
+
+                const scannedData = JSON.parse(localStorage.getItem('scannedData') || '[]');
+                if (scannedData.some(record => record.id === scannedId)) {
+                    showBigAlert(`${member.name}<br>has already been scanned.`, 'info');
+                    return;
+                }
+
+                scannedData.push({ 
+                    id: member.id, 
+                    name: member.name, 
+                    platoon: member.platoon, 
+                    timestamp: new Date().toISOString() 
+                });
+                localStorage.setItem('scannedData', JSON.stringify(scannedData));
+                
+                showBigAlert(`Success!<br>${member.name}`, 'success');
+                updateScanLog();
+
+            } catch (error) {
+                console.error('Error processing QR code:', error);
+                showBigAlert(`Error processing QR code.<br>Is it from your roster?`, 'error');
+            }
+        }
+        
+        // Handle scan failures
+        function onScanFailure(error) {
+            // Silent - this is called frequently during normal operation
+        }
+        
+        // Big Alert Function
+        function showBigAlert(message, type) {
+            alertBox.className = `alert-${type}`;
+            alertIcon.innerHTML = type === 'success' ? '✔' : (type === 'error' ? '✖' : 'ℹ');
+            alertMessage.innerHTML = message;
+            alertOverlay.classList.add('visible');
+
+            setTimeout(() => {
+                alertOverlay.classList.remove('visible');
+            }, 2500);
+        }
+
+        function updateScanLog() {
+            const scannedData = JSON.parse(localStorage.getItem('scannedData') || '[]');
+            scanCount.textContent = scannedData.length;
+            if (scannedData.length === 0) {
+                scannedLog.innerHTML = 'No members scanned yet.';
+                return;
+            }
+            scannedLog.innerHTML = scannedData.map(record => 
+                `<div class="p-1.5 border-b dark:border-gray-600">${record.name} (${record.id}) at ${new Date(record.timestamp).toLocaleTimeString()}</div>`
+            ).join('');
+        }
+        
+        // Handle Syncing data
+        syncDataBtn.addEventListener('click', async () => {
+            const url = localStorage.getItem('webAppUrl');
+            const scannedData = localStorage.getItem('scannedData');
+
+            if (!url) {
+                syncStatus.textContent = 'Error: Web App URL not set.';
+                syncStatus.className = 'mt-2 text-sm text-center text-red-600';
+                return;
+            }
+            if (!scannedData || JSON.parse(scannedData).length === 0) {
+                syncStatus.textContent = 'No data to sync.';
+                syncStatus.className = 'mt-2 text-sm text-center text-yellow-600';
+                return;
+            }
+
+            syncStatus.textContent = 'Syncing...';
+            syncStatus.className = 'mt-2 text-sm text-center text-blue-600';
+            syncDataBtn.disabled = true;
+
+            try {
+                await fetch(url, {
+                    method: 'POST',
+                    mode: 'no-cors', 
+                    headers: { 'Content-Type': 'text/plain' }, 
+                    body: scannedData
+                });
+                
+                syncStatus.innerHTML = `<span class="text-green-600">Sync successful! ${JSON.parse(scannedData).length} records uploaded.</span>`;
+                localStorage.removeItem('scannedData');
+                updateScanLog();
+
+            } catch (error) {
+                syncStatus.textContent = `Sync Error: ${error.message}. Data is still saved locally.`;
+                syncStatus.className = 'mt-2 text-sm text-center text-red-600';
+            } finally {
+                syncDataBtn.disabled = false;
+            }
+        });
+        
+        clearDataBtn.addEventListener('click', () => {
+            if (confirm('Are you sure you want to clear all locally saved scans? This cannot be undone.')) {
+                localStorage.removeItem('scannedData');
+                updateScanLog();
+                syncStatus.textContent = 'Local scan data cleared.';
+                syncStatus.className = 'mt-2 text-sm text-center text-yellow-600';
+            }
+        });
+
+        // Clean up when page is unloaded
+        window.addEventListener('beforeunload', () => {
+            if (html5QrCode && isScanning) {
+                html5QrCode.stop().catch(console.error);
+            }
+        });
+
+    </script>
+</body>
+</html>
